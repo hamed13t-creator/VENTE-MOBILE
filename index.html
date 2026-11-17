@@ -2,9 +2,10 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1f5f8b">
-  <title>VenteMobile</title>
+  <meta name="color-scheme" content="light dark">
+  <title>Vente Mobile</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -12,16 +13,17 @@
 </head>
 <body>
   <header id="topbar">
-    <span id="title">VenteMobile</span>
-    <span id="net" class="net"></span>
+    <a href="#/" data-tab class="logo" aria-label="Accueil"><img id="logo" src="icons/icon-192.png" alt=""></a>
+    <span class="title">Vente Mobile</span>
+    <button id="sync" class="sync" aria-label="Synchronisation"></button>
   </header>
   <main id="main"><p class="muted center">Chargement…</p></main>
   <nav id="nav" hidden>
-    <a href="#/">🏠<span>Accueil</span></a>
-    <a href="#/bon/new">🧾<span>Nouveau bon</span></a>
-    <a href="#/clients">👥<span>Clients</span></a>
-    <a href="#/fournisseurs">🚚<span>Fournisseurs</span></a>
-    <a href="#/plus">☰<span>Plus</span></a>
+    <a href="#/" data-tab>🏠<span>Accueil</span></a>
+    <a href="#/bon/new" data-tab>🧾<span>Nouveau bon</span></a>
+    <a href="#/clients" data-tab>👥<span>Clients</span></a>
+    <a href="#/fournisseurs" data-tab>🚚<span>Fournisseurs</span></a>
+    <a href="#/plus" data-tab>☰<span>Plus</span></a>
   </nav>
   <div id="toast"></div>
   <script type="module" src="app.js"></script>

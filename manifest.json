@@ -1,6 +1,6 @@
 {
-  "name": "VenteMobile",
-  "short_name": "VenteMobile",
+  "name": "Vente Mobile",
+  "short_name": "Vente Mobile",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

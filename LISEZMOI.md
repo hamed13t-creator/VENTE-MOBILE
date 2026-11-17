@@ -1,34 +1,56 @@
-# VenteMobile — mise en service
+# Vente Mobile v2 — mise à jour et mise en service
 
-## 1. Créer le projet Firebase (gratuit)
-1. Aller sur https://console.firebase.google.com → **Ajouter un projet** (Google Analytics : inutile).
-2. **Authentication** → Commencer → activer **E-mail/Mot de passe**.
-3. **Authentication → Utilisateurs → Ajouter un utilisateur** : créer un compte (e-mail + mot de passe) pour chacun des 5 vendeurs.
-4. **Firestore Database** → Créer une base de données (mode production, région `europe-west`).
-5. Onglet **Règles** de Firestore : remplacer le contenu par celui du fichier `firestore.rules`, puis **Publier**.
-6. **Paramètres du projet** (roue dentée) → **Vos applications** → icône **</>** (Web) → donner un nom → copier le bloc `firebaseConfig`.
-7. Coller ces valeurs dans le fichier **config.js**.
+## A. Mettre à jour depuis la version 1 (votre cas)
 
-## 2. Mettre l'application en ligne (gratuit) — GitHub Pages
-1. Créer un compte sur https://github.com, puis **New repository** (public), nom par ex. `ventemobile`.
-2. **Add file → Upload files** : envoyer tous les fichiers du dossier (y compris le dossier `icons`).
-3. **Settings → Pages** → Source : *Deploy from a branch*, branche `main`, dossier `/ (root)` → Save.
-4. Après 1-2 minutes, l'adresse s'affiche, par ex. `https://votrenom.github.io/ventemobile/`.
-5. Dans Firebase : **Authentication → Paramètres → Domaines autorisés** → ajouter `votrenom.github.io`.
+1. **GitHub** : remplacez tous les fichiers du dépôt par ceux de ce dossier
+   (*Add file → Upload files*), **sauf `config.js`** : gardez le vôtre, déjà rempli.
+   Nouveaux fichiers à ne pas oublier : `fb.js`, `util.js`, `ui.js`, `print.js`, `export.js`.
+2. **Devenir administrateur** (une seule fois, avant l'étape 3) :
+   Console Firebase → Firestore Database → collection **users** → ouvrez **votre** document
+   (celui qui contient votre e-mail) → **Ajouter un champ** :
+   - `active` — type **boolean** — valeur **true**
+   - `role` — type **string** — valeur **admin**
+3. **Nouvelles règles de sécurité** : Firestore Database → onglet **Règles** →
+   remplacez tout par le contenu du fichier `firestore.rules` → **Publier**.
+4. Sur chaque téléphone : ouvrez l'application, fermez-la complètement, rouvrez-la (pour charger la nouvelle version).
+5. Les autres vendeurs verront « Compte en attente » : activez-les dans **Plus → Utilisateurs**
+   (et donnez à chacun un **préfixe différent** : K, M, Y…).
 
-## 3. Installer sur chaque téléphone Android
-1. Ouvrir l'adresse dans **Chrome** → se connecter.
-2. Menu ⋮ → **Ajouter à l'écran d'accueil / Installer l'application**.
-3. Chaque vendeur va dans **Plus → Configuration → Mon profil** : son nom et un **préfixe différent** (ex. K, M, Y…) pour la numérotation des bons.
+## B. Nouvelle installation (projet Firebase vide)
+Même procédure que la v1 (Authentication e-mail/mot de passe, Firestore, `config.js`, GitHub Pages,
+domaine autorisé), puis publiez `firestore.rules`.
+**Le tout premier compte qui se connecte devient automatiquement administrateur.**
+Les suivants sont « en attente » jusqu'à activation par l'administrateur.
 
-## 4. Imprimante POS L58
-1. Appairer l'imprimante en Bluetooth dans les réglages Android.
-2. Installer **RawBT** (Play Store), choisir l'imprimante dans RawBT.
-3. Dans l'application : **Plus → Configuration → Ticket de test**.
-   - Si les accents s'impriment mal, laisser « Sans accents ».
+## C. Imprimante POS L58 en Bluetooth direct (sans RawBT)
+1. **Fermez RawBT** et, dans les réglages Bluetooth d'Android, **dissociez** la L58 si elle y est appairée
+   (une imprimante ne peut être connectée qu'à une seule application à la fois).
+2. Bluetooth et **Localisation** du téléphone activés.
+3. Application → **Plus → Configuration → Imprimante** → « Bluetooth direct » → **Choisir l'imprimante**
+   → sélectionnez la L58 dans la liste.
+4. **Ticket de test**. Si le ticket est coupé : « Taille des paquets » = 20. Accents illisibles : « Sans accents ».
+5. Chrome peut redemander le choix de l'imprimante après un redémarrage du téléphone : c'est normal, un appui suffit.
+RawBT reste disponible en secours (Configuration → Mode d'impression).
 
-## À savoir
-- **Hors ligne** : tout continue de fonctionner ; les données partent dès le retour d'Internet (badge orange « Hors ligne » en haut).
-- **Première connexion** d'un téléphone : Internet obligatoire.
-- **Mise à jour** de l'application : remplacer les fichiers sur GitHub, puis changer `ventemobile-v1` en `v2` dans `sw.js`.
-- **Traçabilité** : rien n'est supprimé. Un bon, un achat ou un versement modifié/annulé reste visible avec la mention et l'ancienne version.
+## D. Rôles
+| | Vendeur | Administrateur |
+|---|---|---|
+| Bons, versements, achats, clients, produits | ✓ | ✓ |
+| Modifier un bon / un achat | les siens | tous |
+| Annuler bon, versement, achat | — | ✓ |
+| Changer un solde de départ, supprimer un produit | — | ✓ |
+| Configuration entreprise, utilisateurs, journal, vérification, sauvegarde | — | ✓ |
+
+Ces droits sont **contrôlés par le serveur** (règles Firestore), pas seulement par l'écran.
+
+## E. Bonnes pratiques
+- **Sauvegarde chaque semaine** : Plus → Sauvegarde → Excel + sauvegarde complète. Gardez les fichiers sur Google Drive.
+- **Vérifier les soldes** de temps en temps (Plus → Vérifier les soldes), avec Internet.
+- Indicateur en haut à droite : ✓ tout est envoyé · ⏳ n en cours · ⚠ hors ligne (les opérations sont gardées sur le téléphone).
+  Ne désinstallez pas l'application et ne videz pas les données de Chrome tant qu'il reste des opérations en attente.
+- **Téléphone perdu** : Console Firebase → Authentication → utilisateur → **Désactiver le compte**,
+  et dans l'application Plus → Utilisateurs → décochez « Compte actif ».
+- **Code PIN** (Configuration) : conseillé sur chaque téléphone.
+
+## F. Mettre à jour l'application plus tard
+Remplacez les fichiers sur GitHub, puis dans `sw.js` augmentez le numéro : `ventemobile-v2` → `ventemobile-v3`.

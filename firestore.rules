@@ -1,9 +1,109 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Seuls les utilisateurs connectés (comptes créés dans Firebase) ont accès
-    match /{document=**} {
-      allow read, write: if request.auth != null;
+
+    // ---------- Fonctions ----------
+    function signedIn() { return request.auth != null; }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function settingsPath() { return /databases/$(database)/documents/settings/general; }
+    function me() { return get(userPath(request.auth.uid)).data; }
+    // Compte validé par l'administrateur
+    function isActive() { return signedIn() && exists(userPath(request.auth.uid)) && me().active == true; }
+    function isAdmin() { return isActive() && me().role == 'admin'; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function keeps(keys) { return !changed().hasAny(keys); }
+    function isCreator() { return request.auth.uid == resource.data.createdBy; }
+    function newStatus() { return request.resource.data.status; }
+    // Annulation réservée à l'admin ; modification : admin ou auteur
+    function editOrCancel() {
+      return (newStatus() == 'cancelled' && isAdmin())
+          || (newStatus() != 'cancelled' && (isAdmin() || isCreator()));
+    }
+    function cancelOnly() {
+      return isAdmin() && resource.data.status != 'cancelled' && newStatus() == 'cancelled'
+          && changed().hasOnly(['status', 'cancelledAt', 'cancelledBy', 'cancelledByName']);
+    }
+
+    // ---------- Configuration ----------
+    match /settings/{id} {
+      allow read: if signedIn();
+      // création : par l'admin, ou par le tout premier utilisateur (qui devient admin)
+      allow create: if id == 'general' && (isAdmin() || (
+          !exists(settingsPath())
+          && getAfter(userPath(request.auth.uid)).data.role == 'admin'
+          && request.resource.data.ownerUid == request.auth.uid));
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ---------- Utilisateurs ----------
+    match /users/{uid} {
+      allow read: if isActive() || (signedIn() && request.auth.uid == uid);
+      // un nouveau compte est créé « en attente » ; seul le tout premier devient admin
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && ((request.resource.data.role == 'vendeur' && request.resource.data.active == false)
+            || (request.resource.data.role == 'admin' && request.resource.data.active == true
+                && !exists(settingsPath()) && existsAfter(settingsPath())));
+      allow update: if isAdmin()
+        || (request.auth.uid == uid && isActive()
+            && changed().hasOnly(['name', 'prefix', 'bonCounter', 'recuCounter']));
+      allow delete: if false;
+    }
+
+    // ---------- Données ----------
+    match /products/{id} {
+      allow read, create, update: if isActive();
+      allow delete: if isAdmin();
+    }
+
+    match /clients/{id} {
+      allow read, create: if isActive();
+      allow update: if isActive() && (isAdmin() || keeps(['openingBalance', 'createdAt', 'createdBy']));
+      allow delete: if false;
+    }
+    match /suppliers/{id} {
+      allow read, create: if isActive();
+      allow update: if isActive() && (isAdmin() || keeps(['openingBalance', 'createdAt', 'createdBy']));
+      allow delete: if false;
+    }
+
+    match /sales/{id} {
+      allow read: if isActive();
+      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isActive() && resource.data.status != 'cancelled'
+        && keeps(['number', 'createdAt', 'createdBy', 'createdByName', 'clientId', 'clientName', 'prevBalance', 'syncedAt'])
+        && editOrCancel();
+      allow delete: if false;
+    }
+
+    match /purchases/{id} {
+      allow read: if isActive();
+      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isActive() && resource.data.status != 'cancelled'
+        && keeps(['supplierId', 'supplierName', 'createdAt', 'createdBy', 'createdByName', 'syncedAt'])
+        && editOrCancel();
+      allow delete: if false;
+    }
+
+    match /clientPayments/{id} {
+      allow read: if isActive();
+      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if cancelOnly();
+      allow delete: if false;
+    }
+    match /supplierPayments/{id} {
+      allow read: if isActive();
+      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if cancelOnly();
+      allow delete: if false;
+    }
+
+    // ---------- Journal : ajout seulement, jamais modifié ni supprimé ----------
+    match /journal/{id} {
+      allow read: if isActive();
+      allow create: if isActive() && request.resource.data.by == request.auth.uid;
+      allow update, delete: if false;
     }
   }
 }
