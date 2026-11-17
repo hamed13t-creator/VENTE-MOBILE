@@ -13,7 +13,10 @@ export let auth = null, db = null;
 if (configured) {
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
-  db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    ignoreUndefinedProperties: true // un champ absent (anciennes fiches v1) ne bloque plus l'enregistrement
+  });
 }
 export {
   onAuthStateChanged, signInWithEmailAndPassword, signOut,

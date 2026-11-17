@@ -106,16 +106,17 @@ pre.ticket { background: var(--ticket); color: var(--ticket-t); border: 1px dash
 /* Fenêtres */
 .overlay { position: fixed; inset: 0; background: var(--overlay); z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; opacity: 0; transition: opacity .2s; }
 .overlay.show { opacity: 1; }
-.overlay.bottom { align-items: flex-end; padding: 0; }
+.overlay.top { align-items: flex-start; padding: 0; }
 .dialog { background: var(--card); color: var(--text); border-radius: 14px; padding: 18px; width: 100%; max-width: 420px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
 .dialog h3 { margin-top: 0; }
 .pre { white-space: pre-line; }
 .dlg-actions { display: flex; gap: 8px; margin-top: 14px; }
 .dlg-actions button { flex: 1; }
-.sheet { background: var(--bg); width: 100%; max-width: 720px; margin: 0 auto; max-height: 88vh; display: flex; flex-direction: column; border-radius: 16px 16px 0 0; padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); overflow-y: auto; transform: translateY(30px); transition: transform .2s; }
+.sheet { background: var(--bg); width: 100%; max-width: 720px; margin: 0 auto; max-height: 85vh; max-height: 85dvh; display: flex; flex-direction: column; border-radius: 0 0 16px 16px; padding: calc(12px + env(safe-area-inset-top)) 12px 12px; overflow-y: auto; transform: translateY(-30px); transition: transform .2s; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.sheet-search { position: sticky; top: 0; z-index: 1; }
 .overlay.show .sheet { transform: none; }
 .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.sheet-list { overflow-y: auto; margin-top: 8px; min-height: 120px; }
+.sheet-list { overflow-y: auto; margin-top: 8px; min-height: 60px; }
 
 /* Verrouillage */
 .lock { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }

@@ -15,7 +15,7 @@ import {
 } from './print.js';
 import { exportExcel, exportJSON } from './export.js';
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 const $main = el('main'), $nav = el('nav');
 S.users = [];
 
@@ -53,12 +53,24 @@ function commit(b, msg) {
   if (msg) toast(msg + (navigator.onLine ? '' : ' (hors ligne, sera synchronisé)'));
 }
 const now = () => Timestamp.now();
+// Toute erreur imprévue est affichée (au lieu que « rien ne se passe »)
+addEventListener('unhandledrejection', e => {
+  const m = e.reason?.message || String(e.reason || '');
+  if (m) alertBox('Une erreur est survenue : ' + m + '\n\nRéessayez ; si le problème continue, faites une capture de ce message.', 'Erreur');
+});
 // Journal non modifiable : qui, quand, quoi, avant/après
+// Remplace les valeurs absentes (undefined) par null : Firestore les refuse
+const clean = v => {
+  if (v === undefined) return null;
+  if (Array.isArray(v)) return v.map(clean);
+  if (v && typeof v === 'object' && v.constructor === Object) { const o = {}; for (const k in v) o[k] = clean(v[k]); return o; }
+  return v;
+};
 function logJ(b, action, label, entity, entityId, keys = [], before = null, after = null) {
   b.set(doc(collection(db, 'journal')), {
     at: serverTimestamp(), atDevice: now(), by: S.user.uid, byName: meName(),
-    action, label, entity, entityId, keys: [entityId, ...keys].filter(Boolean),
-    before: before ?? null, after: after ?? null
+    action, label: String(label), entity, entityId, keys: [entityId, ...keys].filter(Boolean),
+    before: clean(before), after: clean(after)
   });
 }
 function nextNumber(field, letter, b) {
@@ -1150,7 +1162,7 @@ function editUser(u) {
     if (role === 'admin' && u.role !== 'admin' && !(await confirmBox(`Donner les droits d'administrateur à ${u.name || u.email} ?`))) return;
     const b = writeBatch(db);
     b.update(doc(db, 'users', u.id), { active, role, prefix });
-    logJ(b, 'Utilisateur', `${u.email} — ${active ? 'actif' : 'désactivé'}, ${role}, préfixe ${prefix}`, 'user', u.id, [], { active: !!u.active, role: u.role, prefix: u.prefix || '' }, { active, role, prefix });
+    logJ(b, 'Utilisateur', `${u.email || u.name || u.id} — ${active ? 'actif' : 'désactivé'}, ${role}, préfixe ${prefix}`, 'user', u.id, [], { active: !!u.active, role: u.role || 'vendeur', prefix: u.prefix || '' }, { active, role, prefix });
     commit(b, 'Utilisateur mis à jour'); sh.close();
   };
 }

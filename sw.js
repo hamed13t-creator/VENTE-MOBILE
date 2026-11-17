@@ -1,7 +1,7 @@
 // Service worker : met l'application en cache pour qu'elle s'ouvre sans Internet.
 // Les données (Firestore) ont leur propre cache hors ligne.
 // ⚠ Après chaque mise à jour des fichiers, augmenter le numéro de version ci-dessous.
-const CACHE = 'ventemobile-v2';
+const CACHE = 'ventemobile-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'fb.js', 'util.js', 'ui.js', 'print.js', 'export.js',
   'config.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 

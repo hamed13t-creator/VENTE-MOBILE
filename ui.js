@@ -42,7 +42,7 @@ export function picker({ title, items, onPick, extra, keepOpen = false, emptyTex
   const o = overlay(`<div class="sheet"><div class="sheet-head"><b>${esc(title)}</b><button class="sec small" data-x>Fermer</button></div>
     <input class="sheet-search" placeholder="🔍 Rechercher…" autocomplete="off">
     ${extra ? `<button class="sec" data-extra style="margin:6px 0">${esc(extra.label)}</button>` : ''}
-    <div class="sheet-list list"></div></div>`, 'bottom');
+    <div class="sheet-list list"></div></div>`, 'top');
   const list = o.querySelector('.sheet-list'), inp = o.querySelector('.sheet-search');
   const m = { close: () => { const i = modals.indexOf(m); if (i >= 0) modals.splice(i, 1); removeOverlay(o); onClose && onClose(); } };
   modals.push(m);
@@ -68,7 +68,7 @@ export function picker({ title, items, onPick, extra, keepOpen = false, emptyTex
 
 // Ouvre un contenu HTML libre dans une fenêtre (ex. aperçu)
 export function sheet(title, html) {
-  const o = overlay(`<div class="sheet"><div class="sheet-head"><b>${esc(title)}</b><button class="sec small" data-x>Fermer</button></div>${html}</div>`, 'bottom');
+  const o = overlay(`<div class="sheet"><div class="sheet-head"><b>${esc(title)}</b><button class="sec small" data-x>Fermer</button></div>${html}</div>`, 'top');
   const m = { close: () => { const i = modals.indexOf(m); if (i >= 0) modals.splice(i, 1); removeOverlay(o); } };
   modals.push(m);
   o.querySelector('[data-x]').onclick = () => m.close();
