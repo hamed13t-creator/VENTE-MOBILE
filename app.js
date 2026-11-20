@@ -15,7 +15,7 @@ import {
 } from './print.js';
 import { exportExcel, exportJSON, restoreJSON } from './export.js';
 
-const VERSION = '2.2';
+const VERSION = '2.3';
 const $main = el('main'), $nav = el('nav');
 S.users = [];
 

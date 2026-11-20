@@ -2,7 +2,7 @@
 // Les fichiers sont servis depuis le cache de la version installée (tous de la même version).
 // ⚠ Après chaque mise à jour des fichiers, augmenter le numéro de version ci-dessous :
 //    les téléphones téléchargent alors la nouvelle version et affichent « Nouvelle version — Recharger ».
-const CACHE = 'ventemobile-v4';
+const CACHE = 'ventemobile-v5';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'fb.js', 'util.js', 'ui.js', 'print.js', 'export.js',
   'config.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 

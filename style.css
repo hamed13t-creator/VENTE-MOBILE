@@ -141,3 +141,27 @@ pre.ticket { background: var(--ticket); color: var(--ticket-t); border: 1px dash
 .hl { color: var(--green); }
 #updbar { position: fixed; top: 0; left: 0; right: 0; z-index: 70; background: var(--orange); color: #222; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; font-weight: 600; }
 #updbar button { background: #222; color: #fff; padding: 7px 12px; }
+
+/* ===== Thème ERK (couleurs du logo) ===== */
+:root {
+  --p: #1d5a78; --btn: #1d5a78; --p2: #e1eeee; --bg: #f4f8f5; --line: #d8e3e0; --muted: #637a79;
+  --green: #2f8f5b; --accent: #5fae84; --head: linear-gradient(100deg, #1a4868 0%, #22617a 55%, #348078 100%);
+}
+:root[data-theme="dark"] {
+  --p: #6fc39a; --btn: #2a7a78; --p2: #1c3436; --bg: #0f1716; --card: #172221; --line: #2a3a39; --muted: #8aa3a0;
+  --green: #6fc39a; --accent: #6fc39a; --head: linear-gradient(100deg, #12324a 0%, #184a5c 55%, #1f5f5a 100%);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    --p: #6fc39a; --btn: #2a7a78; --p2: #1c3436; --bg: #0f1716; --card: #172221; --line: #2a3a39; --muted: #8aa3a0;
+    --green: #6fc39a; --accent: #6fc39a; --head: linear-gradient(100deg, #12324a 0%, #184a5c 55%, #1f5f5a 100%);
+  }
+}
+#topbar { background: var(--head); }
+#topbar .logo img { border-radius: 10px; padding: 1px; }
+.stat { border-top: 3px solid var(--accent); }
+.tabs button.on, button:not(.sec):not(.danger):not(.small):not(.tabs button), .btn:not(.sec) { background: var(--btn); }
+.tabs button:not(.on) { background: var(--p2); color: var(--p); }
+.pick { border-color: var(--accent); }
+.count-badge, .lineno { background: var(--p2); color: var(--p); }
+nav a.on { color: var(--p); border-top: 3px solid var(--accent); margin-top: -1px; }
