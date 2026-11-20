@@ -26,7 +26,7 @@ export function confirmBox(msg, { ok = 'Confirmer', cancel = 'Annuler', danger =
   return new Promise(res => {
     const o = overlay(`<div class="dialog">${title ? `<h3>${esc(title)}</h3>` : ''}<p class="pre">${esc(msg)}</p>
       <div class="dlg-actions">${cancel ? `<button class="sec" data-r="0">${esc(cancel)}</button>` : ''}<button class="${danger ? 'danger' : ''}" data-r="1">${esc(ok)}</button></div></div>`);
-    const m = { close: (back) => { const i = modals.indexOf(m); if (i >= 0) modals.splice(i, 1); removeOverlay(o); res(false); } };
+    const m = { close: () => { const i = modals.indexOf(m); if (i >= 0) modals.splice(i, 1); removeOverlay(o); res(false); } };
     modals.push(m);
     o.querySelectorAll('[data-r]').forEach(b => b.onclick = () => {
       const i = modals.indexOf(m); if (i >= 0) modals.splice(i, 1);
@@ -64,6 +64,15 @@ export function picker({ title, items, onPick, extra, keepOpen = false, emptyTex
   draw();
   setTimeout(() => inp.focus(), 250);
   return { refresh: draw, close: m.close };
+}
+
+// Petite fenêtre en haut de l'écran (reste visible au-dessus du clavier)
+export function popup(html) {
+  const o = overlay(`<div class="dialog">${html}</div>`, 'top pop');
+  const m = { close: () => { const i = modals.indexOf(m); if (i >= 0) modals.splice(i, 1); removeOverlay(o); } };
+  modals.push(m);
+  o.addEventListener('click', e => { if (e.target === o) m.close(); });
+  return { root: o, close: m.close };
 }
 
 // Ouvre un contenu HTML libre dans une fenêtre (ex. aperçu)

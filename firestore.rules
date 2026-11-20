@@ -59,18 +59,18 @@ service cloud.firestore {
 
     match /clients/{id} {
       allow read, create: if isActive();
-      allow update: if isActive() && (isAdmin() || keeps(['openingBalance', 'createdAt', 'createdBy']));
+      allow update: if isActive() && (isAdmin() || keeps(['openingBalance', 'createdAt', 'createdBy', 'archived']));
       allow delete: if false;
     }
     match /suppliers/{id} {
       allow read, create: if isActive();
-      allow update: if isActive() && (isAdmin() || keeps(['openingBalance', 'createdAt', 'createdBy']));
+      allow update: if isActive() && (isAdmin() || keeps(['openingBalance', 'createdAt', 'createdBy', 'archived']));
       allow delete: if false;
     }
 
     match /sales/{id} {
       allow read: if isActive();
-      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow create: if isActive() && (request.resource.data.createdBy == request.auth.uid || isAdmin()); // admin : restauration
       allow update: if isActive() && resource.data.status != 'cancelled'
         && keeps(['number', 'createdAt', 'createdBy', 'createdByName', 'clientId', 'clientName', 'prevBalance', 'syncedAt'])
         && editOrCancel();
@@ -79,7 +79,7 @@ service cloud.firestore {
 
     match /purchases/{id} {
       allow read: if isActive();
-      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow create: if isActive() && (request.resource.data.createdBy == request.auth.uid || isAdmin()); // admin : restauration
       allow update: if isActive() && resource.data.status != 'cancelled'
         && keeps(['supplierId', 'supplierName', 'createdAt', 'createdBy', 'createdByName', 'syncedAt'])
         && editOrCancel();
@@ -88,13 +88,13 @@ service cloud.firestore {
 
     match /clientPayments/{id} {
       allow read: if isActive();
-      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow create: if isActive() && (request.resource.data.createdBy == request.auth.uid || isAdmin()); // admin : restauration
       allow update: if cancelOnly();
       allow delete: if false;
     }
     match /supplierPayments/{id} {
       allow read: if isActive();
-      allow create: if isActive() && request.resource.data.createdBy == request.auth.uid;
+      allow create: if isActive() && (request.resource.data.createdBy == request.auth.uid || isAdmin()); // admin : restauration
       allow update: if cancelOnly();
       allow delete: if false;
     }

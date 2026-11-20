@@ -6,16 +6,16 @@ import {
 } from './fb.js';
 import {
   S, esc, r2, r3, num, fmt, fq, toDate, fd, fdt, isoDay, parseDay, fday, byName, unitShort,
-  meName, isAdmin, clientById, supplierById, ms, match, waPhone, el
+  meName, isAdmin, clientById, supplierById, ms, match, norm, waPhone, el, statsLabel
 } from './util.js';
-import { toast, confirmBox, alertBox, picker, sheet, guard, hasModal, closeTopModal } from './ui.js';
+import { toast, confirmBox, alertBox, picker, sheet, popup, guard, hasModal, closeTopModal } from './ui.js';
 import {
   bonTicket, recuTicket, releveTicket, testTicket, ticketText, printTicket, shareTicket,
   connectPrinter, forgetPrinter, printerName, PC, setPC
 } from './print.js';
-import { exportExcel, exportJSON } from './export.js';
+import { exportExcel, exportJSON, restoreJSON } from './export.js';
 
-const VERSION = '2.1';
+const VERSION = '2.2';
 const $main = el('main'), $nav = el('nav');
 S.users = [];
 
@@ -53,6 +53,11 @@ function commit(b, msg) {
   if (msg) toast(msg + (navigator.onLine ? '' : ' (hors ligne, sera synchronisé)'));
 }
 const now = () => Timestamp.now();
+// Écoute Firestore avec message en cas d'erreur (au lieu d'un écran vide)
+const onSnap = (ref, cb) => onSnapshot(ref, cb, err => {
+  console.error(err);
+  toast(err.code === 'permission-denied' ? 'Accès refusé à certaines données (compte désactivé ?)' : 'Erreur de lecture : ' + err.message, 4000);
+});
 // Toute erreur imprévue est affichée (au lieu que « rien ne se passe »)
 addEventListener('unhandledrejection', e => {
   const m = e.reason?.message || String(e.reason || '');
@@ -83,7 +88,6 @@ function nextNumber(field, letter, b) {
 // ---------- Navigation (bouton Retour, onglets, quitter) ----------
 let depth = 0, pendingTab = null, skipGuard = false, navReady = false, lastHash = '#/';
 let viewSubs = [], current = {};
-const TABS = ['#/', '#/bon/new', '#/clients', '#/fournisseurs', '#/plus'];
 const curHash = () => location.hash || '#/';
 
 function nav(hash, { replace = false } = {}) {
@@ -93,7 +97,10 @@ function nav(hash, { replace = false } = {}) {
 }
 async function navTab(hash) {
   if (hash === curHash()) return;
-  if (current.dirty?.() && !(await confirmBox('Abandonner les modifications en cours ?', { ok: 'Abandonner', danger: true }))) return;
+  if (current.dirty?.()) {
+    if (!(await confirmBox('Abandonner les modifications en cours ?', { ok: 'Abandonner', danger: true }))) return;
+    current.discard?.();
+  }
   current.dirty = null;
   if (depth <= 1) { if (hash === '#/') { history.replaceState({ d: 1 }, '', '#/'); render(); } else nav(hash); return; }
   pendingTab = hash; skipGuard = true;
@@ -111,7 +118,7 @@ window.addEventListener('popstate', async e => {
   }
   if (!skipGuard && current.dirty?.()) {
     history.pushState({ d: depth }, '', lastHash);
-    if (await confirmBox('Abandonner les modifications en cours ?', { ok: 'Abandonner', danger: true })) { skipGuard = true; history.back(); }
+    if (await confirmBox('Abandonner les modifications en cours ?', { ok: 'Abandonner', danger: true })) { current.discard?.(); skipGuard = true; history.back(); }
     return;
   }
   skipGuard = false;
@@ -183,9 +190,9 @@ async function bootstrapUser(user) {
 }
 
 function startData() {
-  dataSubs.push(onSnapshot(doc(db, 'settings', 'general'), s => { S.settings = s.data() || {}; updateLogo(); refresh(); }));
+  dataSubs.push(onSnap(doc(db, 'settings', 'general'), s => { S.settings = s.data() || {}; updateLogo(); refresh(); }));
   for (const c of ['products', 'clients', 'suppliers', 'users']) {
-    dataSubs.push(onSnapshot(collection(db, c), s => { S[c] = s.docs.map(d => ({ id: d.id, ...d.data() })).sort(byName); refresh(); updateBadges(); }));
+    dataSubs.push(onSnap(collection(db, c), s => { S[c] = s.docs.map(d => ({ id: d.id, ...d.data() })).sort(byName); refresh(); updateBadges(); }));
   }
   shell(true);
   if (pinIsSet()) lockScreen(() => navReady ? render() : initNav());
@@ -320,12 +327,12 @@ function viewDash() {
     stop(viewSubs);
     const [a, b] = periodRange(dashPeriod, dashFrom, dashTo);
     const ta = Timestamp.fromDate(a), tb = Timestamp.fromDate(b);
-    viewSubs.push(onSnapshot(query(collection(db, 'sales'), where('createdAt', '>=', ta), where('createdAt', '<', tb)),
+    viewSubs.push(onSnap(query(collection(db, 'sales'), where('createdAt', '>=', ta), where('createdAt', '<', tb)),
       s => { sales = s.docs.map(d => d.data()).filter(x => x.status !== 'cancelled'); draw(); }));
-    viewSubs.push(onSnapshot(query(collection(db, 'clientPayments'), where('createdAt', '>=', ta), where('createdAt', '<', tb)),
+    viewSubs.push(onSnap(query(collection(db, 'clientPayments'), where('createdAt', '>=', ta), where('createdAt', '<', tb)),
       s => { pays = s.docs.map(d => d.data()).filter(x => x.status !== 'cancelled'); draw(); }));
     const ea = new Date(b); ea.setDate(ea.getDate() - 1);
-    viewSubs.push(onSnapshot(query(collection(db, 'purchases'), where('invoiceDate', '>=', isoDay(a)), where('invoiceDate', '<=', isoDay(ea))),
+    viewSubs.push(onSnap(query(collection(db, 'purchases'), where('invoiceDate', '>=', isoDay(a)), where('invoiceDate', '<=', isoDay(ea))),
       s => { purch = s.docs.map(d => d.data()).filter(x => x.status !== 'cancelled'); draw(); }));
   };
   const draw = () => {
@@ -362,14 +369,41 @@ function viewDash() {
 
 // ---------- Bon de vente : création / modification ----------
 const canEditSale = s => s.status !== 'cancelled' && (isAdmin() || s.createdBy === S.user.uid);
+// Produits fréquents : comptés sur ce téléphone, par vendeur (aucune écriture en base)
+const freqKey = () => 'freq_' + S.user.uid;
+const getFreq = () => { try { return JSON.parse(localStorage.getItem(freqKey()) || '{}'); } catch (e) { return {}; } };
+function bumpFreq(pids) { const f = getFreq(); pids.forEach(id => { if (id) f[id] = (f[id] || 0) + 1; }); localStorage.setItem(freqKey(), JSON.stringify(f)); }
+const activeClients = () => S.clients.filter(c => !c.archived);
+
 function viewBonEdit({ id, clientId }) {
-  const dkey = 'draft_' + S.user.uid;
+  const dkey = 'draft_' + S.user.uid, ekey = 'editdraft_' + id;
   let sale = null, items = [], paid = '', cid = '', original = '', restored = false;
+  let lastPrices = {}, lastFor = null;
   const sig = () => JSON.stringify([items.map(x => [x.name, num(x.qty), x.unit, num(x.price)]), num(paid)]);
-  const saveDraft = () => { if (!sale) { if (items.length || cid) localStorage.setItem(dkey, JSON.stringify({ cid, items, paid, at: Date.now() })); } };
+  // Brouillon : nouveau bon ET modification d'un bon existant
+  const saveDraft = () => {
+    if (sale) { if (sig() !== original) localStorage.setItem(ekey, JSON.stringify({ items, paid, at: Date.now() })); else localStorage.removeItem(ekey); return; }
+    if (items.length || cid) localStorage.setItem(dkey, JSON.stringify({ cid, items, paid, at: Date.now() }));
+  };
   const total = () => r2(items.reduce((s, x) => s + r2(num(x.qty) * num(x.price)), 0));
   const prev = () => sale ? sale.prevBalance : (clientById(cid)?.balance || 0);
   current.dirty = () => !!sale && sig() !== original;
+  current.discard = () => { if (sale) localStorage.removeItem(ekey); };
+
+  // Derniers prix pratiqués pour ce client (par produit et par désignation)
+  async function loadLastPrices() {
+    if (!cid || lastFor === cid) return;
+    lastFor = cid; lastPrices = {};
+    try {
+      const s = await getDocs(query(collection(db, 'sales'), where('clientId', '==', cid)));
+      const list = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.status !== 'cancelled' && x.id !== id).sort((a, b) => ms(a.createdAt) - ms(b.createdAt));
+      for (const x of list) for (const it of x.items || []) {
+        const v = { price: it.price, date: x.createdAt };
+        if (it.productId) lastPrices[it.productId] = v;
+        lastPrices['n:' + norm(it.name)] = v;
+      }
+    } catch (e) { /* pas d'historique disponible */ }
+  }
 
   async function init() {
     loading();
@@ -377,8 +411,11 @@ function viewBonEdit({ id, clientId }) {
       const d = await getDoc(doc(db, 'sales', id));
       if (!d.exists()) { $main.innerHTML = '<p>Bon introuvable.</p>'; return; }
       sale = { id: d.id, ...d.data() };
-      if (!canEditSale(sale)) { await alertBox(sale.status === 'cancelled' ? 'Ce bon est annulé, il ne peut plus être modifié.' : 'Seul l\'auteur du bon ou l\'administrateur peut le modifier.'); return nav('#/bon/' + id, { replace: true }); }
+      if (!canEditSale(sale)) { localStorage.removeItem(ekey); await alertBox(sale.status === 'cancelled' ? 'Ce bon est annulé, il ne peut plus être modifié.' : 'Seul l\'auteur du bon ou l\'administrateur peut le modifier.'); return nav('#/bon/' + id, { replace: true }); }
       items = sale.items.map(x => ({ ...x })); paid = sale.paid || ''; cid = sale.clientId; original = sig();
+      let ed = null; try { ed = JSON.parse(localStorage.getItem(ekey) || 'null'); } catch (e) {}
+      if (ed && await confirmBox(`Des modifications non enregistrées de ce bon existent (${fdt(new Date(ed.at))}).\nLes reprendre ?`, { ok: 'Reprendre', cancel: 'Ignorer' })) { items = ed.items; paid = ed.paid; }
+      else localStorage.removeItem(ekey);
     } else {
       let dr = null; try { dr = JSON.parse(localStorage.getItem(dkey) || 'null'); } catch (e) {}
       const picked = localStorage.getItem('pickClient'); localStorage.removeItem('pickClient');
@@ -391,35 +428,76 @@ function viewBonEdit({ id, clientId }) {
       if (picked) cid = picked;
     }
     draw();
+    loadLastPrices();
   }
   const updTotals = () => {
     items.forEach((x, i) => { const t = $main.querySelector(`[data-tot="${i}"]`); if (t) t.textContent = fmt(num(x.qty) * num(x.price)); });
     if (!el('t-total')) return;
     el('t-total').textContent = fmt(total());
     el('t-prev').textContent = fmt(prev());
+    el('t-count').textContent = statsLabel(items);
     const ns = r2(prev() + total() - num(paid));
     el('t-new').textContent = fmt(ns); el('t-new').className = ns > 0 ? 'pos' : 'neg';
     saveDraft();
   };
   const chooseClient = () => picker({
     title: 'Choisir le client',
-    items: S.clients.map(c => ({ id: c.id, label: c.name, sub: [c.phone, c.address].filter(Boolean).join(' · '), right: fmt(c.balance || 0), search: (c.phone || '') + ' ' + (c.address || '') })),
-    onPick: it => { cid = it.id; saveDraft(); draw(); return true; },
+    items: activeClients().map(c => ({ id: c.id, label: c.name, sub: [c.phone, c.address].filter(Boolean).join(' · '), right: fmt(c.balance || 0), search: (c.phone || '') + ' ' + (c.address || '') })),
+    onPick: it => { cid = it.id; saveDraft(); draw(); loadLastPrices(); return true; },
     extra: { label: '+ Nouveau client', onClick: () => { saveDraft(); nav('#/client/nouveau-pour-bon'); } },
     emptyText: 'Aucun client trouvé'
   });
+
+  // Fenêtre quantité / prix (en haut de l'écran, au-dessus du clavier).
+  // p = produit de la liste, ou null pour un article libre. Un même produit peut être ajouté plusieurs fois.
+  const askLine = (p, done) => {
+    const free = !p, unit0 = p?.unit === 'kg' ? 'kg' : 'piece';
+    const last = p ? (lastPrices[p.id] || lastPrices['n:' + norm(p.name)]) : null;
+    const inBon = p ? r3(items.filter(x => x.productId === p.id).reduce((s, x) => s + num(x.qty), 0)) : 0;
+    const price0 = last ? last.price : (p ? p.price : '');
+    const pp = popup(`
+      <h3>${free ? 'Article libre' : esc(p.name)}</h3>
+      ${free ? '<label>Désignation *</label><input id="pn" placeholder="Nom de l\'article" autocomplete="off">' : ''}
+      ${p ? `<p class="sub">Prix liste : ${fmt(p.price)} / ${unitShort(unit0)}${last ? `<br><b class="hl">Dernier prix pour ce client : ${fmt(last.price)}</b> (le ${fd(last.date)})` : ''}${inBon ? `<br>Déjà ${fq(inBon)} ${unitShort(unit0)} dans ce bon` : ''}</p>` : ''}
+      <label>Quantité${p ? ' (' + (unit0 === 'kg' ? 'kg' : 'pièces') + ')' : ''}</label>
+      <div class="row qrow"><button class="sec fit" data-s="-1">−</button><input id="pq" type="number" inputmode="decimal" step="any" value="1"><button class="sec fit" data-s="1">+</button>
+        ${free ? '<select id="pu" class="fit"><option value="piece">pièce</option><option value="kg">kg</option></select>' : ''}</div>
+      <label>Prix unitaire</label>
+      <div class="row"><input id="pp" type="number" inputmode="decimal" step="any" value="${price0}" placeholder="0">${last && last.price !== p.price ? '<button class="sec small fit" id="plist">Prix liste</button>' : ''}</div>
+      <div class="row big" style="margin-top:10px"><span>Total ligne</span><span id="pt" class="amt" style="text-align:right"></span></div>
+      <div class="dlg-actions"><button class="sec" id="pc">Annuler</button><button id="pv">✓ Valider</button></div>`);
+    const $ = s => pp.root.querySelector(s);
+    const upd = () => { $('#pt').textContent = fmt(num($('#pq').value) * num($('#pp').value)); };
+    pp.root.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { $('#pq').value = Math.max(0, r3(num($('#pq').value) + +b.dataset.s)); upd(); });
+    $('#pq').oninput = upd; $('#pp').oninput = upd;
+    if ($('#plist')) $('#plist').onclick = () => { $('#pp').value = p.price; upd(); };
+    $('#pc').onclick = () => pp.close();
+    const ok = () => {
+      const name = free ? $('#pn').value.trim() : p.name, qty = r3(num($('#pq').value)), price = r2(num($('#pp').value));
+      if (!name) { $('#pn').focus(); return toast('Saisissez la désignation'); }
+      if (qty <= 0) { $('#pq').focus(); return toast('Quantité invalide'); }
+      items.push({ productId: p ? p.id : null, name, qty, unit: free ? $('#pu').value : unit0, price });
+      saveDraft(); pp.close(); toast(`${name} × ${fq(qty)} ajouté`); done && done();
+    };
+    $('#pv').onclick = ok;
+    // Touche Entrée : champ suivant, puis Valider
+    const chain = free ? ['#pn', '#pq', '#pp'] : ['#pq', '#pp'];
+    chain.forEach((sel, i) => { $(sel).onkeydown = e => { if (e.key !== 'Enter') return; e.preventDefault(); const nx = chain[i + 1]; if (nx) { $(nx).focus(); $(nx).select?.(); } else ok(); }; });
+    upd();
+    setTimeout(() => { const f = $(chain[0]); f.focus(); f.select?.(); }, 150);
+  };
   const addProducts = () => {
-    const qtyOf = pid => items.filter(x => x.productId === pid).reduce((s, x) => s + num(x.qty), 0);
-    const list = S.products.map(p => ({ id: p.id, label: p.name, sub: fmt(p.price) + ' / ' + unitShort(p.unit), count: qtyOf(p.id) }));
-    picker({
+    const qtyOf = pid => r3(items.filter(x => x.productId === pid).reduce((s, x) => s + num(x.qty), 0));
+    const fr = getFreq();
+    const list = S.products.slice().sort((a, b) => (fr[b.id] || 0) - (fr[a.id] || 0) || byName(a, b))
+      .map((p, i) => ({
+        id: p.id, label: ((fr[p.id] || 0) >= 2 && i < 10 ? '⭐ ' : '') + p.name, search: p.name,
+        sub: fmt(p.price) + ' / ' + unitShort(p.unit) + (lastPrices[p.id] ? ' · dernier prix client ' + fmt(lastPrices[p.id].price) : ''),
+        count: qtyOf(p.id)
+      }));
+    const pk = picker({
       title: 'Ajouter des produits', keepOpen: true, items: list,
-      onPick: it => {
-        const p = S.products.find(x => x.id === it.id);
-        const ex = items.find(x => x.productId === p.id);
-        if (ex) ex.qty = r3(num(ex.qty) + 1); else items.push({ productId: p.id, name: p.name, qty: 1, unit: p.unit || 'piece', price: p.price });
-        it.count = qtyOf(p.id); toast(p.name + ' ajouté'); saveDraft();
-        return false;
-      },
+      onPick: it => { askLine(S.products.find(x => x.id === it.id), () => { it.count = qtyOf(it.id); pk.refresh(); }); return false; },
       onClose: draw,
       extra: { label: '+ Créer un produit dans la liste', onClick: () => { saveDraft(); nav('#/produits'); } },
       emptyText: 'Aucun produit — utilisez « Article libre »'
@@ -434,10 +512,10 @@ function viewBonEdit({ id, clientId }) {
       <div class="card pick ${sale ? 'fixed' : ''}" id="pickc">
         ${c ? `<div><b>${esc(c.name)}</b><div class="sub">Solde actuel : ${fmt(c.balance || 0)}</div></div>` : '<div class="muted">👤 Choisir le client…</div>'}
         ${sale ? '' : '<span>›</span>'}</div>
-      <h3>Articles ${items.length ? `(${items.length})` : ''}</h3>
-      <div id="lines">${items.map((x, i) => `
+      <div class="row" style="margin-top:14px"><h3 style="margin:0">Articles</h3><span id="t-count" class="count-badge"></span></div>
+      <div id="lines" style="margin-top:8px">${items.map((x, i) => `
         <div class="line">
-          <div class="row"><input data-i="${i}" data-f="name" value="${esc(x.name)}" placeholder="Désignation">
+          <div class="row"><span class="lineno">${i + 1}</span><input data-i="${i}" data-f="name" value="${esc(x.name)}" placeholder="Désignation">
             <button class="danger small fit" data-del="${i}" aria-label="Supprimer">✕</button></div>
           <div class="row qrow">
             <button class="sec fit" data-q="${i}" data-s="-1">−</button>
@@ -445,7 +523,7 @@ function viewBonEdit({ id, clientId }) {
             <button class="sec fit" data-q="${i}" data-s="1">+</button>
             <select data-i="${i}" data-f="unit"><option value="piece" ${x.unit !== 'kg' ? 'selected' : ''}>pièce</option><option value="kg" ${x.unit === 'kg' ? 'selected' : ''}>kg</option></select>
           </div>
-          <div class="row"><span class="muted small-t">Prix unitaire</span><input data-i="${i}" data-f="price" type="number" inputmode="decimal" step="any" value="${x.price}" placeholder="Prix">
+          <div class="row"><span class="muted small-t fit">Prix</span><input data-i="${i}" data-f="price" type="number" inputmode="decimal" step="any" value="${x.price}" placeholder="Prix">
             <span class="tot" data-tot="${i}">${fmt(num(x.qty) * num(x.price))}</span></div>
         </div>`).join('') || '<p class="muted">Aucun article.</p>'}</div>
       <div class="row"><button id="addp">+ Produits</button><button class="sec" id="free">+ Article libre</button></div>
@@ -468,13 +546,17 @@ function viewBonEdit({ id, clientId }) {
       const x = items[+b.dataset.q]; x.qty = Math.max(0, r3(num(x.qty) + +b.dataset.s));
       $main.querySelector(`[data-i="${b.dataset.q}"][data-f="qty"]`).value = x.qty; updTotals();
     });
-    $main.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { items.splice(+b.dataset.del, 1); saveDraft(); if (!items.length && !sale) localStorage.removeItem(dkey); draw(); });
+    $main.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      const x = items[+b.dataset.del];
+      if (x.name && !(await confirmBox(`Retirer « ${x.name} » du bon ?`, { ok: 'Retirer', danger: true }))) return;
+      items.splice(+b.dataset.del, 1); saveDraft(); if (!items.length && !sale && !cid) localStorage.removeItem(dkey); draw();
+    });
     $main.querySelectorAll('[data-pay]').forEach(b => b.onclick = () => {
       const v = b.dataset.pay; paid = v === '0' ? '' : v === 'bon' ? total() : r2(Math.max(0, prev() + total()));
       el('paid').value = paid; updTotals();
     });
     el('addp').onclick = addProducts;
-    el('free').onclick = () => { items.push({ productId: null, name: '', qty: 1, unit: 'piece', price: '' }); draw(); $main.querySelector(`[data-i="${items.length - 1}"][data-f="name"]`).focus(); };
+    el('free').onclick = () => askLine(null, draw);
     el('paid').oninput = e => { paid = e.target.value; updTotals(); };
     guard(el('save'), () => save(false));
     guard(el('savep'), () => save(true));
@@ -494,20 +576,20 @@ function viewBonEdit({ id, clientId }) {
       const c = clientById(cid);
       const ref = doc(collection(db, 'sales')); saleId = ref.id;
       data = {
-        number: nextNumber('bonCounter', '', b), clientId: cid, clientName: c.name, items: clean, total: tot, paid: pd,
+        number: nextNumber('bonCounter', '', b), clientId: cid, clientName: c.name, items: clean, itemCount: clean.length, total: tot, paid: pd,
         prevBalance: r2(c.balance || 0), newBalance: r2((c.balance || 0) + tot - pd), status: 'ok',
         createdAt: now(), createdBy: S.user.uid, createdByName: meName(), syncedAt: serverTimestamp(), history: []
       };
       b.set(ref, data);
       b.update(doc(db, 'clients', cid), { balance: increment(r2(tot - pd)) });
-      logJ(b, 'Création bon', `Bon ${data.number} — ${c.name} — total ${fmt(tot)}, versé ${fmt(pd)}`, 'sale', saleId, [cid], null, { items: clean, total: tot, paid: pd });
+      logJ(b, 'Création bon', `Bon ${data.number} — ${c.name} — ${clean.length} article(s) — total ${fmt(tot)}, versé ${fmt(pd)}`, 'sale', saleId, [cid], null, { items: clean, total: tot, paid: pd });
     } else {
       const delta = r2((tot - pd) - (sale.total - (sale.paid || 0)));
-      const msg = `Ancien total : ${fmt(sale.total)} → nouveau : ${fmt(tot)}\nAncien versement : ${fmt(sale.paid)} → nouveau : ${fmt(pd)}\n\nLe solde du client sera ajusté de ${delta >= 0 ? '+' : ''}${fmt(delta)}.\nL'ancienne version restera visible.`;
+      const msg = `Ancien total : ${fmt(sale.total)} → nouveau : ${fmt(tot)}\nAncien versement : ${fmt(sale.paid)} → nouveau : ${fmt(pd)}\nArticles : ${sale.items.length} → ${clean.length}\n\nLe solde du client sera ajusté de ${delta >= 0 ? '+' : ''}${fmt(delta)}.\nL'ancienne version restera visible.`;
       if (!(await confirmBox(msg, { title: 'Modifier le bon ' + sale.number + ' ?', ok: 'Modifier' }))) return;
       saleId = sale.id;
       const upd = {
-        items: clean, total: tot, paid: pd, newBalance: r2(sale.prevBalance + tot - pd), status: 'modified',
+        items: clean, itemCount: clean.length, total: tot, paid: pd, newBalance: r2(sale.prevBalance + tot - pd), status: 'modified',
         modifiedAt: now(), modifiedBy: S.user.uid, modifiedByName: meName(),
         history: arrayUnion({ at: now(), byName: meName(), items: sale.items, total: sale.total, paid: sale.paid || 0 })
       };
@@ -519,7 +601,8 @@ function viewBonEdit({ id, clientId }) {
       original = sig();
     }
     commit(b, 'Bon enregistré');
-    if (!sale) localStorage.removeItem(dkey);
+    bumpFreq(clean.map(x => x.productId));
+    localStorage.removeItem(sale ? ekey : dkey);
     current.dirty = null;
     nav('#/bon/' + saleId, { replace: true });
     if (print) printTicket(bonTicket(data));
@@ -527,7 +610,6 @@ function viewBonEdit({ id, clientId }) {
   init();
   current.onState = () => {
     if (!el('pickc')) return;
-    // la liste des clients/soldes a changé : mise à jour sans perdre la saisie
     const c = clientById(cid), card = el('pickc');
     if (c && !card.querySelector('b')) draw(); else updTotals();
   };
@@ -536,7 +618,7 @@ function viewBonEdit({ id, clientId }) {
 // ---------- Bon : consultation ----------
 function viewBon(id) {
   loading();
-  viewSubs.push(onSnapshot(doc(db, 'sales', id), d => {
+  viewSubs.push(onSnap(doc(db, 'sales', id), d => {
     if (!d.exists()) { $main.innerHTML = '<p>Bon introuvable.</p>'; return; }
     const s = { id: d.id, ...d.data() };
     $main.innerHTML = `
@@ -544,6 +626,7 @@ function viewBon(id) {
       <p class="muted small-t">Créé le ${fdt(s.createdAt)} par ${esc(s.createdByName)}${s.syncedAt ? ` · reçu par le serveur le ${fdt(s.syncedAt)}` : ' · ⏳ pas encore envoyé'}
         ${s.status === 'modified' ? `<br>Modifié le ${fdt(s.modifiedAt)} par ${esc(s.modifiedByName)}` : ''}
         ${s.status === 'cancelled' ? `<br>Annulé le ${fdt(s.cancelledAt)} par ${esc(s.cancelledByName)}` : ''}</p>
+      <p class="count-line">📦 ${statsLabel(s.items)}</p>
       <pre class="ticket">${esc(ticketText(bonTicket(s)))}</pre>
       <div class="actions"><button id="pr">🖨️ Imprimer</button><button class="sec" id="sh">📤 Partager</button></div>
       <div class="actions">
@@ -569,33 +652,52 @@ function viewBon(id) {
   }));
 }
 
-// ---------- Liste des bons ----------
+// ---------- Liste des bons (par période, chargement progressif) ----------
+const bonsPrefs = { p: 'week', n: 100, f: '' };
 function viewBons() {
-  let list = [], f = '';
-  loading();
-  viewSubs.push(onSnapshot(query(collection(db, 'sales'), orderBy('createdAt', 'desc'), limit(300)), s => {
-    list = s.docs.map(d => ({ id: d.id, ...d.data() })); draw();
-  }));
-  const draw = () => {
-    const rows = list.filter(s => match(s.number + ' ' + s.clientName + ' ' + s.createdByName, f));
-    const html = rows.map(s => `<a href="#/bon/${s.id}" class="${s.status === 'cancelled' ? 'cancelled' : ''}">
-        <div><b>${esc(s.number)}</b> ${statusBadge(s.status)}<div class="sub">${esc(s.clientName)} · ${fdt(s.createdAt)} · ${esc(s.createdByName)}</div></div>
-        <span class="amt">${fmt(s.total)}</span></a>`).join('') || '<p class="muted">Aucun bon.</p>';
-    if (!el('f')) {
-      $main.innerHTML = `<h2>Bons de vente</h2><input id="f" type="search" placeholder="🔍 N° de bon, client ou vendeur"><div class="list" id="ls" style="margin-top:10px"></div>`;
-      el('f').oninput = e => { f = e.target.value; draw(); };
+  let list = [];
+  const P = { ...PERIODS, all: 'Tout' }; delete P.custom;
+  const sub = () => {
+    stop(viewSubs);
+    let q;
+    if (bonsPrefs.p === 'all') q = query(collection(db, 'sales'), orderBy('createdAt', 'desc'), limit(bonsPrefs.n));
+    else {
+      const [a, b] = periodRange(bonsPrefs.p);
+      q = query(collection(db, 'sales'), where('createdAt', '>=', Timestamp.fromDate(a)), where('createdAt', '<', Timestamp.fromDate(b)), orderBy('createdAt', 'desc'), limit(bonsPrefs.n));
     }
-    el('ls').innerHTML = html;
+    viewSubs.push(onSnap(q, s => { list = s.docs.map(d => ({ id: d.id, ...d.data() })); draw(); }));
   };
+  const draw = () => {
+    const rows = list.filter(s => match(s.number + ' ' + s.clientName + ' ' + s.createdByName, bonsPrefs.f));
+    const ok = rows.filter(s => s.status !== 'cancelled');
+    if (!el('f')) {
+      $main.innerHTML = `<h2>Bons de vente</h2>
+        <div class="tabs">${Object.entries(P).map(([k, v]) => `<button data-p="${k}" class="${k === bonsPrefs.p ? 'on' : ''}">${v}</button>`).join('')}</div>
+        <input id="f" type="search" placeholder="🔍 N° de bon, client ou vendeur" value="${esc(bonsPrefs.f)}">
+        <p class="small-t muted" id="sum"></p><div class="list" id="ls"></div><div id="more"></div>`;
+      el('f').oninput = e => { bonsPrefs.f = e.target.value; draw(); };
+      $main.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+        bonsPrefs.p = b.dataset.p; bonsPrefs.n = 100;
+        $main.querySelectorAll('[data-p]').forEach(x => x.classList.toggle('on', x === b)); sub();
+      });
+    }
+    el('sum').textContent = `${rows.length} bon(s) · total ${fmt(sumBy(ok, s => s.total))}`;
+    el('ls').innerHTML = rows.map(s => `<a href="#/bon/${s.id}" class="${s.status === 'cancelled' ? 'cancelled' : ''}">
+        <div><b>${esc(s.number)}</b> ${statusBadge(s.status)}<div class="sub">${esc(s.clientName)} · ${fdt(s.createdAt)} · ${esc(s.createdByName)} · ${s.itemCount ?? s.items.length} art.</div></div>
+        <span class="amt">${fmt(s.total)}</span></a>`).join('') || '<p class="muted">Aucun bon sur cette période.</p>';
+    el('more').innerHTML = list.length >= bonsPrefs.n ? '<div class="actions"><button class="sec" id="mo">Afficher plus</button></div>' : '';
+    if (el('mo')) el('mo').onclick = () => { bonsPrefs.n += 100; sub(); };
+  };
+  loading(); sub();
 }
 
 // ---------- Clients / fournisseurs ----------
-const listPrefs = { client: { f: '', debt: false, sort: 'name' }, supplier: { f: '', debt: false, sort: 'name' } };
+const listPrefs = { client: { f: '', debt: false, sort: 'name', arch: false }, supplier: { f: '', debt: false, sort: 'name', arch: false } };
 function viewPartyList(kind) {
   const isC = kind === 'client', P = listPrefs[kind], base = isC ? 'client' : 'fournisseur';
   const draw = () => {
     const all = isC ? S.clients : S.suppliers;
-    let rows = all.filter(x => match(x.name + ' ' + (x.phone || '') + ' ' + (x.address || ''), P.f) && (!P.debt || (x.balance || 0) > 0));
+    let rows = all.filter(x => !!x.archived === P.arch && match(x.name + ' ' + (x.phone || '') + ' ' + (x.address || ''), P.f) && (!P.debt || (x.balance || 0) > 0));
     if (P.sort === 'bal') rows = rows.slice().sort((a, b) => (b.balance || 0) - (a.balance || 0));
     const html = rows.map(x => `<a href="#/${base}/${x.id}">
         <div>${esc(x.name)}<div class="sub">${esc([x.phone, x.address].filter(Boolean).join(' · '))}</div></div>
@@ -604,12 +706,17 @@ function viewPartyList(kind) {
       $main.innerHTML = `<h2>${isC ? 'Clients' : 'Fournisseurs'}</h2>
         <div class="stat"><div class="l">${isC ? 'Total créances' : 'Total dû'}</div><div class="v pos" id="tot"></div></div>
         <div class="row" style="margin-top:10px"><input id="f" type="search" placeholder="🔍 Nom, téléphone, adresse" value="${esc(P.f)}"><a class="btn fit" href="#/${base}/form">+ Ajouter</a></div>
-        <div class="chips"><button class="small" id="debt"></button><button class="small" id="sort"></button></div>
+        <div class="chips"><button class="small" id="debt"></button><button class="small" id="sort"></button><button class="small" id="arch"></button></div>
         <div class="list" id="ls"></div>`;
       el('f').oninput = e => { P.f = e.target.value; draw(); };
       el('debt').onclick = () => { P.debt = !P.debt; draw(); };
       el('sort').onclick = () => { P.sort = P.sort === 'name' ? 'bal' : 'name'; draw(); };
+      el('arch').onclick = () => { P.arch = !P.arch; draw(); };
     }
+    const nArch = all.filter(x => x.archived).length;
+    el('arch').hidden = !nArch && !P.arch;
+    el('arch').textContent = P.arch ? '✓ Archivés' : `Archivés (${nArch})`;
+    el('arch').className = 'small ' + (P.arch ? '' : 'sec');
     el('tot').textContent = fmt(sumBy(all, x => x.balance || 0));
     el('debt').textContent = P.debt ? (isC ? '✓ Qui doivent' : '✓ À payer') : (isC ? 'Qui doivent' : 'À payer');
     el('debt').className = 'small ' + (P.debt ? '' : 'sec');
@@ -666,6 +773,18 @@ function viewPartyForm(kind, id, forBon = false) {
   });
 }
 
+// Archiver / désarchiver (administrateur) : rien n'est supprimé, l'historique reste
+async function toggleArchive(kind, x) {
+  const isC = kind === 'client', arch = !x.archived;
+  let msg = arch ? `« ${x.name} » sera masqué des listes${isC ? ' et du choix du client dans les bons' : ''}. Son historique est conservé.` : `« ${x.name} » réapparaîtra dans les listes.`;
+  if (arch && Math.abs(x.balance || 0) > 0.009) msg += `\n\n⚠ Son solde n'est pas nul (${fmt(x.balance)}).`;
+  if (!(await confirmBox(msg, { title: arch ? 'Archiver ?' : 'Désarchiver ?', ok: arch ? 'Archiver' : 'Désarchiver' }))) return;
+  const b = writeBatch(db);
+  b.update(doc(db, isC ? 'clients' : 'suppliers', x.id), { archived: arch, updatedAt: now(), updatedByName: meName() });
+  logJ(b, arch ? 'Archivage' : 'Désarchivage', `${isC ? 'Client' : 'Fournisseur'} ${x.name}`, kind, x.id, [], { archived: !!x.archived }, { archived: arch });
+  commit(b, arch ? 'Archivé' : 'Désarchivé');
+}
+
 function journalSheet(id, title) {
   const sh = sheet('Journal — ' + title, '<div class="list jl"><p class="muted center">Chargement…</p></div>');
   getDocs(query(collection(db, 'journal'), where('keys', 'array-contains', id))).then(s => {
@@ -680,49 +799,52 @@ function contactButtons(x) {
 
 function viewClient(id) {
   let sales = [], pays = [];
-  viewSubs.push(onSnapshot(query(collection(db, 'sales'), where('clientId', '==', id)), s => { sales = s.docs.map(d => ({ id: d.id, t: 'sale', ...d.data() })); draw(); }));
-  viewSubs.push(onSnapshot(query(collection(db, 'clientPayments'), where('clientId', '==', id)), s => { pays = s.docs.map(d => ({ id: d.id, t: 'pay', ...d.data() })); draw(); }));
+  viewSubs.push(onSnap(query(collection(db, 'sales'), where('clientId', '==', id)), s => { sales = s.docs.map(d => ({ id: d.id, t: 'sale', ...d.data() })); draw(); }));
+  viewSubs.push(onSnap(query(collection(db, 'clientPayments'), where('clientId', '==', id)), s => { pays = s.docs.map(d => ({ id: d.id, t: 'pay', ...d.data() })); draw(); }));
   const draw = () => {
     const c = clientById(id);
     if (!c) return loading();
     const rows = [...sales, ...pays].sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
-    $main.innerHTML = `<h2>${esc(c.name)}</h2>
+    $main.innerHTML = `<h2>${esc(c.name)}</h2>${c.archived ? '<p class="note mod">🗄️ Client archivé : masqué des listes et du choix client.</p>' : ''}
       <p class="muted">${esc([c.phone, c.address].filter(Boolean).join(' · '))}</p>
       <div class="grid2"><div class="stat"><div class="l">Solde actuel</div><div class="v ${(c.balance || 0) > 0 ? 'pos' : 'neg'}">${fmt(c.balance || 0)}</div></div>
         <div class="stat"><div class="l">Solde de départ</div><div class="v">${fmt(c.openingBalance || 0)}</div></div></div>
       <div class="actions"><a class="btn" href="#/bon/new/${c.id}">🧾 Nouveau bon</a><a class="btn" href="#/versement/c/${c.id}">💰 Versement</a></div>
       <div class="actions">${contactButtons(c)}<a class="btn sec" href="#/releve/c/${c.id}">📄 Relevé</a>
-        <a class="btn sec" href="#/client/form/${c.id}">✏️ Modifier</a><button class="sec" id="jr">🕓 Journal</button></div>
+        <a class="btn sec" href="#/client/form/${c.id}">✏️ Modifier</a><button class="sec" id="jr">🕓 Journal</button>
+        ${isAdmin() ? `<button class="sec" id="arc">${c.archived ? '♻️ Désarchiver' : '🗄️ Archiver'}</button>` : ''}</div>
       <h3>Historique</h3>
       <div class="list">${rows.map(r => r.t === 'sale' ? `
         <a href="#/bon/${r.id}" class="${r.status === 'cancelled' ? 'cancelled' : ''}"><div>🧾 Bon ${esc(r.number)} ${statusBadge(r.status)}
-          <div class="sub">${fdt(r.createdAt)} · ${esc(r.createdByName)}${r.paid ? ' · versé ' + fmt(r.paid) : ''}</div></div>
+          <div class="sub">${fdt(r.createdAt)} · ${esc(r.createdByName)} · ${r.itemCount ?? (r.items || []).length} art.${r.paid ? ' · versé ' + fmt(r.paid) : ''}</div></div>
           <span class="amt pos">+${fmt(r.total)}</span></a>` : `
         <a href="#/recu/${r.id}" class="${r.status === 'cancelled' ? 'cancelled' : ''}"><div>💰 Versement ${esc(r.number || '')} ${statusBadge(r.status)}
           <div class="sub">${fdt(r.createdAt)} · ${esc(r.createdByName)}${r.note ? ' · ' + esc(r.note) : ''}</div></div>
           <span class="amt neg">−${fmt(r.amount)}</span></a>`).join('') || '<p class="muted">Aucune opération.</p>'}
         <div class="it"><div>Solde de départ</div><span class="amt">${fmt(c.openingBalance || 0)}</span></div></div>`;
     el('jr').onclick = () => journalSheet(c.id, c.name);
+    if (el('arc')) guard(el('arc'), () => toggleArchive('client', c));
   };
   draw(); current.onState = draw;
 }
 
 function viewSupplier(id) {
   let purch = [], pays = [];
-  viewSubs.push(onSnapshot(query(collection(db, 'purchases'), where('supplierId', '==', id)), s => { purch = s.docs.map(d => ({ id: d.id, t: 'buy', ...d.data() })); draw(); }));
-  viewSubs.push(onSnapshot(query(collection(db, 'supplierPayments'), where('supplierId', '==', id)), s => { pays = s.docs.map(d => ({ id: d.id, t: 'pay', ...d.data() })); draw(); }));
+  viewSubs.push(onSnap(query(collection(db, 'purchases'), where('supplierId', '==', id)), s => { purch = s.docs.map(d => ({ id: d.id, t: 'buy', ...d.data() })); draw(); }));
+  viewSubs.push(onSnap(query(collection(db, 'supplierPayments'), where('supplierId', '==', id)), s => { pays = s.docs.map(d => ({ id: d.id, t: 'pay', ...d.data() })); draw(); }));
   const opDay = r => r.t === 'buy' ? (r.invoiceDate || isoDay(toDate(r.createdAt) || new Date())) : isoDay(toDate(r.createdAt) || new Date());
   const draw = () => {
     const f = supplierById(id);
     if (!f) return loading();
     const rows = [...purch, ...pays].sort((a, b) => opDay(b).localeCompare(opDay(a)) || ms(b.createdAt) - ms(a.createdAt));
-    $main.innerHTML = `<h2>${esc(f.name)}</h2>
+    $main.innerHTML = `<h2>${esc(f.name)}</h2>${f.archived ? '<p class="note mod">🗄️ Fournisseur archivé : masqué de la liste.</p>' : ''}
       <p class="muted">${esc([f.phone, f.address].filter(Boolean).join(' · '))}</p>
       <div class="grid2"><div class="stat"><div class="l">Solde dû</div><div class="v ${(f.balance || 0) > 0 ? 'pos' : 'neg'}">${fmt(f.balance || 0)}</div></div>
         <div class="stat"><div class="l">Solde de départ</div><div class="v">${fmt(f.openingBalance || 0)}</div></div></div>
       <div class="actions"><a class="btn" href="#/achat/new/${f.id}">📦 Achat</a><a class="btn" href="#/versement/f/${f.id}">💰 Versement</a></div>
       <div class="actions">${contactButtons(f)}<a class="btn sec" href="#/releve/f/${f.id}">📄 Relevé</a>
-        <a class="btn sec" href="#/fournisseur/form/${f.id}">✏️ Modifier</a><button class="sec" id="jr">🕓 Journal</button></div>
+        <a class="btn sec" href="#/fournisseur/form/${f.id}">✏️ Modifier</a><button class="sec" id="jr">🕓 Journal</button>
+        ${isAdmin() ? `<button class="sec" id="arc">${f.archived ? '♻️ Désarchiver' : '🗄️ Archiver'}</button>` : ''}</div>
       <h3>Historique</h3>
       <div class="list">${rows.map(r => r.t === 'buy' ? `
         <a href="#/achat/${r.id}" class="${r.status === 'cancelled' ? 'cancelled' : ''}"><div>📦 Achat ${r.invoiceNo ? 'fact. ' + esc(r.invoiceNo) : ''} ${statusBadge(r.status)}
@@ -734,6 +856,7 @@ function viewSupplier(id) {
           <span class="amt neg">−${fmt(r.amount)}</span></div>`).join('') || '<p class="muted">Aucune opération.</p>'}
         <div class="it"><div>Solde de départ</div><span class="amt">${fmt(f.openingBalance || 0)}</span></div></div>`;
     el('jr').onclick = () => journalSheet(f.id, f.name);
+    if (el('arc')) guard(el('arc'), () => toggleArchive('supplier', f));
     $main.querySelectorAll('[data-cp]').forEach(btn => guard(btn, async () => {
       const p = pays.find(x => x.id === btn.dataset.cp);
       if (!(await confirmBox(`Le solde dû au fournisseur augmentera de ${fmt(p.amount)}.`, { title: 'Annuler ce versement ?', ok: 'Annuler le versement', cancel: 'Retour', danger: true }))) return;
@@ -752,8 +875,8 @@ function viewReleve(k, id) {
   const isC = k === 'c';
   let A = [], B = [], from = '';
   const cols = isC ? ['sales', 'clientPayments', 'clientId'] : ['purchases', 'supplierPayments', 'supplierId'];
-  viewSubs.push(onSnapshot(query(collection(db, cols[0]), where(cols[2], '==', id)), s => { A = s.docs.map(d => d.data()); draw(); }));
-  viewSubs.push(onSnapshot(query(collection(db, cols[1]), where(cols[2], '==', id)), s => { B = s.docs.map(d => d.data()); draw(); }));
+  viewSubs.push(onSnap(query(collection(db, cols[0]), where(cols[2], '==', id)), s => { A = s.docs.map(d => d.data()); draw(); }));
+  viewSubs.push(onSnap(query(collection(db, cols[1]), where(cols[2], '==', id)), s => { B = s.docs.map(d => d.data()); draw(); }));
   const compute = x => {
     const ops = [];
     for (const a of A.filter(a => a.status !== 'cancelled')) {
@@ -829,7 +952,7 @@ function viewClientPayment(cid) {
 
 function viewRecu(id) {
   loading();
-  viewSubs.push(onSnapshot(doc(db, 'clientPayments', id), d => {
+  viewSubs.push(onSnap(doc(db, 'clientPayments', id), d => {
     if (!d.exists()) { $main.innerHTML = '<p>Reçu introuvable.</p>'; return; }
     const p = { id: d.id, ...d.data() };
     $main.innerHTML = `<h2>Versement ${esc(p.number || '')} ${statusBadge(p.status)}</h2>
@@ -1175,7 +1298,7 @@ function viewJournal() {
   const sub = () => {
     stop(viewSubs);
     const [a, b] = periodRange(jPeriod);
-    viewSubs.push(onSnapshot(query(collection(db, 'journal'), where('atDevice', '>=', Timestamp.fromDate(a)), where('atDevice', '<', Timestamp.fromDate(b))), s => {
+    viewSubs.push(onSnap(query(collection(db, 'journal'), where('atDevice', '>=', Timestamp.fromDate(a)), where('atDevice', '<', Timestamp.fromDate(b))), s => {
       rows = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((x, y) => ms(y.atDevice) - ms(x.atDevice)); draw();
     }));
   };
@@ -1233,7 +1356,7 @@ function viewCheck() {
   });
 }
 
-// ---------- Administration : sauvegarde ----------
+// ---------- Administration : sauvegarde et restauration ----------
 function viewBackup() {
   if (!isAdmin()) return viewDash();
   const last = localStorage.getItem('lastBackup');
@@ -1243,7 +1366,12 @@ function viewBackup() {
     <div class="card"><b>📊 Export Excel</b><p class="small-t muted">Clients, fournisseurs, produits, bons et leurs lignes, versements, achats, journal — une feuille par élément.</p>
       <div class="actions"><button id="xl">Télécharger le fichier Excel</button></div></div>
     <div class="card"><b>🗄️ Sauvegarde complète</b><p class="small-t muted">Fichier .json contenant toutes les données, utilisable pour une restauration.</p>
-      <div class="actions"><button class="sec" id="js">Télécharger la sauvegarde</button></div></div>`;
+      <div class="actions"><button class="sec" id="js">Télécharger la sauvegarde</button></div></div>
+    <div class="card"><b>♻️ Restaurer une sauvegarde</b>
+      <p class="small-t muted">Remet les éléments <b>manquants</b> (bons, versements, achats, clients, fournisseurs, produits) à partir d'un fichier .json.
+      Rien d'existant n'est écrasé ni supprimé. Lancez ensuite « Vérifier les soldes ».</p>
+      <label class="btn sec" style="display:block">Choisir le fichier .json…<input type="file" id="rf" accept=".json,application/json" hidden></label>
+      <div id="rres"></div></div>`;
   const run = fn => async () => {
     if (!navigator.onLine) return alertBox('Internet est nécessaire pour une sauvegarde complète.');
     toast('Préparation…');
@@ -1251,4 +1379,28 @@ function viewBackup() {
     catch (e) { alertBox('Erreur : ' + e.message); }
   };
   guard(el('xl'), run(exportExcel)); guard(el('js'), run(exportJSON));
+  el('rf').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    if (!navigator.onLine) return alertBox('Internet est nécessaire pour restaurer.');
+    let data;
+    try { data = JSON.parse(await f.text()); if (!data.collections) throw new Error(); }
+    catch (er) { return alertBox('Ce fichier n\'est pas une sauvegarde Vente Mobile valide.'); }
+    const c = data.collections, n = k => (c[k] || []).length;
+    if (!(await confirmBox(`Sauvegarde du ${fdt(new Date(data.exportedAt))}\n\n${n('clients')} clients · ${n('suppliers')} fournisseurs · ${n('products')} produits\n${n('sales')} bons · ${n('clientPayments')} versements clients\n${n('purchases')} achats · ${n('supplierPayments')} versements fournisseurs\n\nSeuls les éléments absents seront ajoutés.`, { title: 'Restaurer ?', ok: 'Restaurer' }))) return;
+    el('rres').innerHTML = '<p class="muted">Restauration en cours…</p>';
+    try {
+      const r = await restoreJSON(data, msg => { el('rres').innerHTML = `<p class="muted">${esc(msg)}</p>`; });
+      // numérotation : on repart après le plus grand numéro restauré de cet utilisateur
+      const maxNo = (arr, letter) => Math.max(0, ...(arr || []).map(x => String(x.number || '')).filter(s => s.startsWith((S.me.prefix || '') + letter + '-')).map(s => +s.split('-').pop() || 0));
+      const nb = maxNo(c.sales, ''), nr = maxNo(c.clientPayments, 'R');
+      const b = writeBatch(db), upd = {};
+      if (nb > (S.me.bonCounter || 0)) upd.bonCounter = nb;
+      if (nr > (S.me.recuCounter || 0)) upd.recuCounter = nr;
+      if (Object.keys(upd).length) b.update(doc(db, 'users', S.user.uid), upd);
+      logJ(b, 'Restauration', `${r.added} élément(s) restauré(s) depuis la sauvegarde du ${fdt(new Date(data.exportedAt))}`, 'backup', 'restore', [], null, r.byCol);
+      commit(b);
+      el('rres').innerHTML = `<p class="neg"><b>✓ ${r.added} élément(s) restauré(s)</b>, ${r.skipped} déjà présent(s).</p><div class="actions"><a class="btn" href="#/verification">🔍 Vérifier les soldes</a></div>`;
+    } catch (er) { el('rres').innerHTML = `<p class="pos">Erreur : ${esc(er.message)}</p>`; }
+  };
 }

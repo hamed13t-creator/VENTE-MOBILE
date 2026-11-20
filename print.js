@@ -1,5 +1,5 @@
 // Impression : mise en forme des tickets, ESC/POS, Bluetooth direct (BLE), RawBT, image à partager
-import { S, fmt, fq, fdt, fd, unitShort } from './util.js';
+import { S, fmt, fq, fdt, fd, unitShort, itemStats } from './util.js';
 import { toast, alertBox } from './ui.js';
 
 // ---------- Mise en forme (texte 58 mm) ----------
@@ -54,6 +54,10 @@ export function bonTicket(s) {
     wrap(it.name).forEach(t => L.push({ t }));
     L.push({ t: lr(`  ${fq(it.qty)} ${unitShort(it.unit)} x ${fmt(it.price)}`, fmt(it.total)) });
   }
+  L.push(sep());
+  const st = itemStats(s.items);
+  L.push({ t: lr('Nombre d\'articles', String(st.lines)) });
+  if (st.qtyLabel) L.push({ t: lr('Quantité totale', st.qtyLabel) });
   L.push(sep());
   L.push({ t: lr('TOTAL BON', fmt(s.total)), b: true });
   L.push({ t: lr('Ancien solde', fmt(s.prevBalance)) });
@@ -173,6 +177,8 @@ const SERVICES = [
 ];
 let device = null, chr = null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+function dropConnection() { try { device?.gatt?.disconnect(); } catch (e) {} chr = null; }
 export const printMode = () => PC().mode;
 export const printerName = () => localStorage.getItem('printerName') || '';
 
@@ -183,7 +189,7 @@ async function pickDevice() {
   return device;
 }
 async function findChar(dev) {
-  const server = await dev.gatt.connect();
+  const server = await withTimeout(dev.gatt.connect(), 15000, 'l\'imprimante ne répond pas (connexion).');
   const services = await server.getPrimaryServices();
   for (const s of services) {
     for (const c of await s.getCharacteristics()) {
@@ -247,10 +253,10 @@ export async function printTicket(L) {
     const bytes = await escpos(L);
     await ready;
     toast('Impression en cours…');
-    await writeBle(bytes);
+    await withTimeout(writeBle(bytes), 20000 + bytes.length * 3, 'l\'envoi au ticket a été interrompu.');
     toast('Imprimé ✓');
   } catch (e) {
-    chr = null;
+    dropConnection();
     if (e.name === 'NotFoundError') toast('Aucune imprimante choisie.');
     else await alertBox('Impression impossible : ' + e.message + '\n\nVérifiez que l\'imprimante est allumée, proche, et qu\'elle n\'est pas connectée à un autre téléphone (ou à RawBT). Puis réessayez.', 'Impression');
   } finally { busy = false; }

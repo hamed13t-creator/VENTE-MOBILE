@@ -5,8 +5,8 @@ export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;'
 export const r2 = n => Math.round((+n || 0) * 100) / 100;
 export const r3 = n => Math.round((+n || 0) * 1000) / 1000;
 export const num = v => { const n = parseFloat(String(v ?? '').replace(',', '.').replace(/\s/g, '')); return isNaN(n) ? 0 : n; };
-export const fmt = n => r2(n).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/[  ]/g, ' ');
-export const fq = n => r3(n).toLocaleString('fr-FR', { maximumFractionDigits: 3 }).replace(/[  ]/g, ' ');
+export const fmt = n => (r2(n) + 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/[  ]/g, ' ');
+export const fq = n => (r3(n) + 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 }).replace(/[  ]/g, ' ');
 export const toDate = t => t?.toDate ? t.toDate() : (t instanceof Date ? t : (t ? new Date(t) : null));
 export const p2 = n => String(n).padStart(2, '0');
 export const fd = t => { const d = toDate(t); return d && !isNaN(d) ? `${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()}` : ''; };
@@ -26,3 +26,13 @@ export const match = (text, q) => !q || norm(text).includes(norm(q));
 // Numéro algérien 0555… -> 213555… pour WhatsApp
 export const waPhone = p => { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('00')) d = d.slice(2); if (d.startsWith('0')) d = '213' + d.slice(1); return d; };
 export const el = id => document.getElementById(id);
+// Nombre d'articles et quantités totales d'un bon (aide au pointage)
+export function itemStats(items = []) {
+  let pc = 0, kg = 0;
+  for (const x of items) { const q = num(x.qty); if (x.unit === 'kg') kg += q; else pc += q; }
+  const parts = [];
+  if (pc) parts.push(fq(pc) + ' pc');
+  if (kg) parts.push(fq(kg) + ' kg');
+  return { lines: items.length, pc: r3(pc), kg: r3(kg), qtyLabel: parts.join(' + ') };
+}
+export const statsLabel = items => { const s = itemStats(items); return `${s.lines} article${s.lines > 1 ? 's' : ''}${s.qtyLabel ? ' · ' + s.qtyLabel : ''}`; };

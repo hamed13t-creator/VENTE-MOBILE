@@ -1,12 +1,12 @@
 // Sauvegarde : export Excel (.xlsx) et sauvegarde complète (.json)
-import { db, collection, getDocs } from './fb.js';
+import { db, collection, getDocs, doc, writeBatch, Timestamp } from './fb.js';
 import { toDate, fdt, isoDay } from './util.js';
 
 export const COLS = ['settings', 'users', 'products', 'clients', 'suppliers', 'sales', 'clientPayments', 'purchases', 'supplierPayments', 'journal'];
 
-// Convertit les dates Firestore en texte ISO (récursif)
+// Convertit les dates Firestore en { __ts: "ISO" } (récursif) pour pouvoir les restaurer
 function plain(v) {
-  if (v && typeof v.toDate === 'function') return v.toDate().toISOString();
+  if (v && typeof v.toDate === 'function') return { __ts: v.toDate().toISOString() };
   if (Array.isArray(v)) return v.map(plain);
   if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = plain(v[k]); return o; }
   return v;
@@ -26,7 +26,7 @@ function download(blob, name) {
 }
 export async function exportJSON() {
   const data = await loadAll();
-  const out = { app: 'VenteMobile', exportedAt: new Date().toISOString(), collections: {} };
+  const out = { app: 'VenteMobile', format: 2, exportedAt: new Date().toISOString(), collections: {} };
   for (const c in data) out.collections[c] = data[c].map(plain);
   download(new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' }), `ventemobile-sauvegarde-${isoDay(new Date())}.json`);
 }
@@ -84,4 +84,35 @@ export async function exportExcel() {
     ['Journal', [['Date', 'Utilisateur', 'Action', 'Détail'], ...d.journal.sort((a, b) => toDate(a.atDevice) - toDate(b.atDevice)).map(j => [fdt(j.atDevice), j.byName, j.action, j.label])]],
   ];
   download(buildXlsx(sheets), `ventemobile-${isoDay(new Date())}.xlsx`);
+}
+
+// ---- Restauration : ajoute seulement les documents absents (rien n'est écrasé) ----
+const DATE_KEYS = ['createdAt', 'modifiedAt', 'cancelledAt', 'syncedAt', 'updatedAt', 'at', 'atDevice'];
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+function revive(v, key) {
+  if (v && typeof v === 'object' && typeof v.__ts === 'string') return Timestamp.fromDate(new Date(v.__ts));
+  if (typeof v === 'string' && DATE_KEYS.includes(key) && ISO.test(v)) return Timestamp.fromDate(new Date(v)); // anciennes sauvegardes
+  if (Array.isArray(v)) return v.map(x => revive(x));
+  if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = revive(v[k], k); return o; }
+  return v;
+}
+export const RESTORE_COLS = ['products', 'clients', 'suppliers', 'sales', 'clientPayments', 'purchases', 'supplierPayments'];
+export async function restoreJSON(data, progress = () => {}) {
+  let added = 0, skipped = 0; const byCol = {};
+  for (const c of RESTORE_COLS) {
+    const rows = data.collections[c] || [];
+    if (!rows.length) continue;
+    progress(`Vérification : ${c}…`);
+    const existing = new Set((await getDocs(collection(db, c))).docs.map(d => d.id));
+    const missing = rows.filter(r => r.id && !existing.has(r.id));
+    skipped += rows.length - missing.length;
+    for (let i = 0; i < missing.length; i += 400) {
+      const b = writeBatch(db);
+      for (const r of missing.slice(i, i + 400)) { const { id, ...rest } = r; b.set(doc(db, c, id), revive(rest)); }
+      progress(`Restauration : ${c} (${Math.min(i + 400, missing.length)}/${missing.length})…`);
+      await b.commit();
+    }
+    added += missing.length; byCol[c] = missing.length;
+  }
+  return { added, skipped, byCol };
 }

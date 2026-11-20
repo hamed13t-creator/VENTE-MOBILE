@@ -1,4 +1,10 @@
-# Vente Mobile v2 — mise à jour et mise en service
+# Vente Mobile v2.2 — mise à jour et mise en service
+
+## Passer de la v2.1 à la v2.2
+1. GitHub : remplacez **tous** les fichiers sauf `config.js` (dont `index.html`, `sw.js`, `firestore.rules`).
+2. Firestore → **Règles** : recollez le contenu de `firestore.rules` → **Publier** (nécessaire pour l'archivage et la restauration).
+3. Sur chaque téléphone : fermez et rouvrez l'application **deux fois**. À partir de cette version, les mises à jour suivantes
+   s'annonceront d'elles-mêmes par un bandeau « Nouvelle version disponible — Recharger ».
 
 ## A. Mettre à jour depuis la version 1 (votre cas)
 
@@ -53,4 +59,5 @@ Ces droits sont **contrôlés par le serveur** (règles Firestore), pas seulemen
 - **Code PIN** (Configuration) : conseillé sur chaque téléphone.
 
 ## F. Mettre à jour l'application plus tard
-Remplacez les fichiers sur GitHub, puis dans `sw.js` augmentez le numéro : `ventemobile-v2` → `ventemobile-v3`.
+Remplacez les fichiers sur GitHub, puis dans `sw.js` augmentez le numéro de version (ex. `ventemobile-v4` → `ventemobile-v5`).
+⚠ **Indispensable** : sans ce changement, les téléphones gardent l'ancienne version (elle est conservée pour fonctionner hors ligne).

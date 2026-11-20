@@ -28,7 +28,19 @@
   <div id="toast"></div>
   <script type="module" src="app.js"></script>
   <script>
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+    // Mise en cache hors ligne + bandeau « Nouvelle version » (indépendant du reste de l'application)
+    if ('serviceWorker' in navigator) {
+      let had = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.register('sw.js').then(r => setInterval(() => r.update().catch(() => {}), 30 * 60000)).catch(() => {});
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!had) { had = true; return; }
+        if (document.getElementById('updbar')) return;
+        const b = document.createElement('div'); b.id = 'updbar';
+        b.innerHTML = '<span>Nouvelle version disponible</span><button>Recharger</button>';
+        b.querySelector('button').onclick = () => location.reload();
+        document.body.appendChild(b);
+      });
+    }
   </script>
 </body>
 </html>
